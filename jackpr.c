@@ -37,11 +37,23 @@ long inject(pid_t pid, struct user_regs_struct *orig, long nr, long *args) {
     regs.r10 = args[3];
 
     // replace the tracee's register state with the prepared syscall state
-    ptrace(PTRACE_SETREGS, pid, NULL, &regs);
+    if(ptrace(PTRACE_SETREGS, pid, NULL, &regs) == -1) {
+        fputs("ptrace(PTRACE_SETREGS) failed", stderr);
+        return -1;
+    }
     // execute the injected syscall instruction at the current RIP
-    ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL);
-    waitpid(pid, NULL, 0);
-    ptrace(PTRACE_GETREGS, pid, NULL, &regs);
+    if(ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) == -1) {
+        fputs("ptrace(PTRACE_SINGLESTEP) failed", stderr);
+        return -1;
+    }
+    if(waitpid(pid, NULL, 0) == -1) {
+        fputs("waitpid failed", stderr);
+        return -1;
+    }
+    if(ptrace(PTRACE_GETREGS, pid, NULL, &regs) == -1) {
+        fputs("ptrace(PTRACE_GETREGS) failed", stderr);
+        return -1;
+    }
 
     // return result (RAX)
     return regs.rax;
@@ -145,7 +157,10 @@ void hijack_terminal(int pid, int new_fd, struct user_regs_struct *regs, long *a
         args[0] = new_fd;
         args[1] = i;
         args[2] = args[3] = 0;
-        if((flag >> i) & 1) inject(pid, regs, SYS_dup2, args);
+        if((flag >> i) & 1) {
+            int result = inject(pid, regs, SYS_dup2, args);
+            if(result == -1) exit(-1);
+        }
     }
 }
 
@@ -278,7 +293,7 @@ int run_jackpr(int argc, char *argv[])
             if(new_fd >= 0) {
                 // duplicate the tty fd onto the selected standard streams.
                 hijack_terminal(pid, new_fd, &orig_regs, args, flag);
-                
+
                 // set arguments to zero before closing new_fd
                 args[0] = new_fd;
                 args[1] = args[2] = args[3] = 0;
@@ -292,7 +307,7 @@ int run_jackpr(int argc, char *argv[])
             ptrace(PTRACE_SETREGS, pid, NULL, &orig_regs);
             // detach from the tracee and resume it.
             ptrace(PTRACE_DETACH, pid, NULL, NULL);
-            
+
         }
     }
     return 0;
